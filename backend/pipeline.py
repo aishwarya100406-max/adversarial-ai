@@ -9,7 +9,15 @@ Given a user's investigative question, decompose it into 3-6 atomic, independent
 checkable sub-questions. Each sub-question should be narrow enough that a handful of
 web searches could gather direct evidence for or against it. Avoid vague sub-questions.
 
-Return a JSON array of strings, e.g. ["sub-question 1", "sub-question 2", ...]"""
+For each sub-question, also produce a short search_query: 4-8 keywords (no question
+words like "did", "was", "were", no question marks, no filler) that a search engine
+would use to find relevant news articles. Long natural-language questions perform badly
+on web search engines, so the search_query must be terse and keyword-based, e.g.
+sub_question "Did Boeing issue any airworthiness directives about the door plug before 2024?"
+-> search_query "Boeing 737 MAX door plug airworthiness directive".
+
+Return a JSON array of objects:
+[{"sub_question": "...", "search_query": "..."}]"""
 
 EXTRACT_SYSTEM = """You are the Claim Extraction agent in an OSINT investigation pipeline.
 You will be given a sub-question and a set of source snippets/excerpts (each with an id).
@@ -43,21 +51,24 @@ Return JSON: {"text": "...", "rebuttal_type": "...", "strength": 0.0-1.0}"""
 
 def run_investigation(query: str, log: list[str]) -> InvestigationResult:
     log.append(f"Planner: decomposing query '{query}'")
-    sub_questions = call_json(PLANNER_SYSTEM, query)
-    if not isinstance(sub_questions, list):
-        sub_questions = [query]
-    log.append(f"Planner produced {len(sub_questions)} sub-questions")
+    plan = call_json(PLANNER_SYSTEM, query)
+    if not isinstance(plan, list) or not plan:
+        plan = [{"sub_question": query, "search_query": query}]
+    plan = [p for p in plan if isinstance(p, dict) and p.get("sub_question") and p.get("search_query")]
+    sub_questions = [p["sub_question"] for p in plan]
+    log.append(f"Planner produced {len(plan)} sub-questions")
 
     all_sources: dict[str, Source] = {}
     all_claims: list[Claim] = []
 
-    for i, sq in enumerate(sub_questions):
+    for i, p in enumerate(plan):
+        sq, search_query = p["sub_question"], p["search_query"]
         if i > 0:
             time.sleep(3)  # avoid tripping DDG's rate limiter across sub-questions
-        log.append(f"Retrieval: searching for '{sq}'")
-        raw_results = web_search(sq, max_results=6)
+        log.append(f"Retrieval: searching for '{search_query}' (sub-question: '{sq}')")
+        raw_results = web_search(search_query, max_results=6)
         if not raw_results:
-            log.append(f"  no results for '{sq}'")
+            log.append(f"  no results for '{search_query}'")
             continue
 
         sub_sources: dict[str, Source] = {}
